@@ -1,5 +1,8 @@
 from fastapi import FastAPI,HTTPException
 from pydantic import BaseModel
+from typing import List,Any
+import tempfile
+import json
 import docker
 import os
 
@@ -8,52 +11,115 @@ app=FastAPI()
 #connext to local docker desktop
 client=docker.from_env()
 
+# --- data models ---
+class TestCase(BaseModel):
+    inputs: List[Any]
+    expected: Any
+
 class CodeSubmission(BaseModel):
     code: str #the python code user wants to run
+    function_name: str
+    test_cases: List[TestCase]
 
-@app.post("/execute")
-def execute_code(submission: CodeSubmission):
-    try:
-        # 1. Create the container (The Prison Cell)
-        # We mount nothing. The container is empty.
-        # We inject the code directly as a command.
-        
-        # 'network_disabled=True' is CRITICAL. 
-        # It stops the user from downloading malware or attacking your network.
-        container=client.containers.run(
-            "python-sandbox",   #the image we built
-            command=["python","-c",submission.code], #run their code
-            mem_limit="128m",    #max 128mb ram
-            cpu_quota=50000,    #max 50% of 1 cpu core
-            network_disabled=True,   #no internet access
-            detach=True,    #run in bg
-            auto_remove=True, #Automatically delete the container when it stops
-            stdout=True,
-            stderr=True
-        )
+# --- Wrapper script generator ---
 
-        # 2. Wait for it to finish (The Timeout)
-        # If code runs longer than 2 seconds, we kill it.
+def generate_test_script(user_code: str,function_name: str,test_cases: List[TestCase]) -> str:
+    test_cases_json=json.dumps([tc.model_dump() for tc in test_cases])
+
+    wrapper_code= f"""import json
+import sys
+
+# --- USER CODE ---
+{user_code}
+
+def write_output(data):
+    with open('/app/output.json','w') as f:
+        json.dump(data,f)
+
+if __name__ == "__main__":
+    test_cases = json.loads('''{test_cases_json}''')
+    passed_count=0
+
+    for i,tc in enumerate(test_cases):
+        inputs=tc["inputs"]
+        expected=tc["expected"]
 
         try:
-            container.wait(timeout=2)
-
-            #3 capture the output (what did they print)
-            logs=container.logs().decode("utf-8")
+            result = {function_name}(*inputs)
+            if result == expected:
+                passed_count+=1
+            else:
+                write_output({{"status": "Failed", "test_case": i + 1, "expected": expected, "got": result}})
+                sys.exit(0)
 
         except Exception as e:
-            #if it is times out, kill the container manually
-            container.kill()
-            return {"status": "Error", "output": "Time Limit Exceeded (2s)"}
+            write_output({{"status": "Error", "test_case": i + 1, "error": str(e)}})
+            sys.exit(0)
+            
+    write_output({{"status": "Accepted", "passed": passed_count, "total": len(test_cases)}})
+"""
+    return wrapper_code
 
-        #cleanup (destroy the cell)
-        container.remove()
+# --- 3. The Bulletproof Execution Endpoint ---
+@app.post("/submit")
+def submit_code(submission: CodeSubmission):
+    final_script = generate_test_script(
+        user_code=submission.code,
+        function_name=submission.function_name,
+        test_cases=submission.test_cases
+    )
+    
+    # FIX 1: Use your current project folder instead of Mac's weird /tmp folder
+    current_dir = os.getcwd() 
+    with tempfile.TemporaryDirectory(dir=current_dir) as temp_dir:
+        runner_path = os.path.join(temp_dir, "runner.py")
+        output_path = os.path.join(temp_dir, "output.json")
+        
+        with open(runner_path, "w") as f:
+            f.write(final_script)
+            
+        try:
+            container = client.containers.run(
+                "python-sandbox", 
+                command=["python", "/app/runner.py"],
+                volumes={
+                    # Explicitly use absolute path for Mac compatibility
+                    os.path.abspath(temp_dir): {'bind': '/app', 'mode': 'rw'}
+                },
+                detach=True,
+                # FIX 2: Temporarily disable auto_remove so we can read the crime scene logs
+                auto_remove=False,  
+                mem_limit="128m",
+                cpu_quota=50000,
+                network_disabled=True
+            )
+            
+            try:
+                container.wait(timeout=2)
+            except Exception:
+                container.kill()
+                container.remove() # Manually clean up
+                return {"status": "Time Limit Exceeded"}
+                
+            # FIX 3: If output.json is missing, grab the actual Docker logs!
+            if os.path.exists(output_path):
+                with open(output_path, "r") as f:
+                    result = json.load(f)
+                container.remove() # Manually clean up
+                return result
+            else:
+                # Grab the logs to see the exact Python error
+                error_logs = container.logs().decode("utf-8")
+                container.remove() # Manually clean up
+                return {
+                    "status": "Container Crashed", 
+                    "docker_logs": error_logs,
+                    "hint": "Read the docker_logs above. It will tell you the exact Python error!"
+                }
 
-        return {"status": "Success", "output": logs}
-    
-    except Exception as e:
-        return {"status":"System Error","details":str(e)}
-    
+        except Exception as e:
+            return {"status": "System Error", "details": str(e)}
+        
 
 @app.get("/")
 def read_root():
