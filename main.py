@@ -10,7 +10,20 @@ import os
 from database import SessionLocal
 from models import Problem,TestCase,Submission
 
+from fastapi.middleware.cors import CORSMiddleware 
+
 app=FastAPI()
+
+# --- 2. ADD THIS ENTIRE BLOCK IMMEDIATELY AFTER app = FastAPI() ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows your React app (port 5173) to connect
+    allow_credentials=True,
+    allow_methods=["*"],  # This tells FastAPI to accept the "OPTIONS" request!
+    allow_headers=["*"],
+)
+
+
 #connext to local docker desktop
 client=docker.from_env()
 
@@ -160,7 +173,7 @@ def submit_code(submission: CodeSubmission,db: Session=Depends(getdb)):
                 f.write(final_script)
                 
             docker_image = "cpp-sandbox"
-            # Command: Compile the code FIRST, and if successful (&&), run the compiled binary
+            # Command: Compile  the code FIRST, and if successful (&&), run the compiled binary
 
             docker_command=["sh","-c","g++ /app/runner.cpp -o /app/run && /app/run"]
 
