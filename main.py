@@ -71,7 +71,7 @@ if __name__ == "__main__":
             if result == expected:
                 passed_count+=1
             else:
-                write_output({{"status": "Failed", "test_case": i + 1, "expected": expected, "got": result}})
+                write_output({{"status": "Failed", "test_case": i + 1, "inputs": inputs,"expected": expected, "got": result}})
                 sys.exit(0)
 
         except Exception as e:
@@ -82,42 +82,39 @@ if __name__ == "__main__":
 """
     return wrapper_code
 
-
-def generate_cpp_script(user_code: str,function_name: str,test_cases: list)->str:
-    """
-    Dynamically writes a C++ program. It injects the user's function, 
-    and writes a main() function that tests the inputs and outputs.
-    """
-    cpp_code=f"""#include <iostream>
+def generate_cpp_script(user_code: str, function_name: str, test_cases: list) -> str:
+    cpp_code = f"""#include <iostream>
 #include <fstream>
 #include <string>
 
-// -- USER CODE --
+// --- USER CODE ---
 {user_code}
 
-int main(){{
+int main() {{
     std::ofstream out("/app/output.json");
-    int passed_count=0;
+    int passed_count = 0;
 """
-    #dynamically generate the c++ if/else statements for each test case
-    for i,tc in enumerate(test_cases):
-        # Convert Python list [1, 2] to C++ arguments "1, 2"
-        inputs=", ".join(map(str,tc["inputs"]))
-        expected=tc["expected"]
+    for i, tc in enumerate(test_cases):
+        inputs = ", ".join(map(str, tc["inputs"])) 
+        expected = tc["expected"]
 
+        inputs_display=f"[{inputs}]"
+        
+        # FIX: We now evaluate the function FIRST and store it in 'result_i'.
+        # This prevents the C++ stream from breaking our JSON string!
         cpp_code += f"""
-    if({function_name}({inputs})=={expected}) {{
+    int result_{i} = {function_name}({inputs});
+    
+    if (result_{i} == {expected}) {{
         passed_count++;
-    }}
-    else{{
-        // If it fails, write the failure JSON and exit immediately 
-        out<<"{{\\"status\\":\\"Failed\\", \\"test_cases\\":{i+1}, \\"expected\\": {expected}, \\"got\\": \"" << {function_name}({inputs})<<"\"}}";
+    }} else {{
+        // adding new inputs field in json string
+        out << "{{\\"status\\": \\"Failed\\", \\"test_case\\": {i+1},\\"input\\":{inputs_display}, \\"expected\\": {expected}, \\"got\\": " << result_{i} << "}}";
         return 0;
     }}
 """
-    # If all test cases pass, write the success JSON
-    cpp_code+=f"""
-    out << "{{\\"status\\": \\"Accepted\\", \\"passed\\": " << passed_count << ", \\"total\\": {len(test_cases)} }}";
+    cpp_code += f"""
+    out << "{{\\"status\\": \\"Accepted\\", \\"passed\\": " << passed_count << ", \\"total\\": {len(test_cases)}}}";
     return 0;
 }}
 """
@@ -241,3 +238,18 @@ def read_root():
 def get_problems(db: Session=Depends(getdb)):
     problems = db.query(Problem).all()
     return [{"id": p.id, "title": p.title, "difficulty": p.difficulty} for p in problems]
+
+@app.get("/problems/{problem_id}/submissions")
+def get_submissions(problem_id:int, db: Session=Depends(getdb)):
+    #fetch all the submissions for this problem ordered by newest first (.desc())
+    submissions=db.query(Submission).filter(Submission.problem_id==problem_id).order_by(Submission.id.desc()).all()
+
+    #format the data to send back to react
+    return [
+        {
+            "id" : sub.id,
+            "status" : sub.status,
+            "code" : sub.user_code
+        }
+        for sub in submissions
+    ]
