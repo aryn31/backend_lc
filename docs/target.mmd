@@ -1,0 +1,9 @@
+flowchart LR
+    FE["React Frontend"] -->|POST /submit| API["FastAPI\n(async)"]
+    API -->|Enqueue job| Q["Redis Queue"]
+    API -->|Return job_id| FE
+    Q --> W1["Worker 1\n(Docker executor)"]
+    Q --> W2["Worker 2\n(Docker executor)"]
+    W1 & W2 -->|Write result| DB["PostgreSQL"]
+    FE -->|WS / polling| API
+    API -->|Read result| DB
