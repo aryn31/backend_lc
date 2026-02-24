@@ -8,19 +8,73 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [problem, setProblem] = useState(null);
   const [language, setLanguage] = useState("python");
+  const [problemsList, setProblemsList] = useState([]); // <-- ADD THIS
   
   // NEW STATE: For the History Tab
   const [activeTab, setActiveTab] = useState("description"); // "description" or "history"
   const [history, setHistory] = useState([]);
 
+  // --- NEW: Dynamic Boilerplate Generator ---
+  const generateBoilerplate = (prob, lang) => {
+    if (!prob) return "";
+    
+    // Extract argument names dynamically from the first example's JSON keys
+    let argNames = "args";
+    if (prob.examples && prob.examples.length > 0 && prob.examples[0].input) {
+      const inputObj = prob.examples[0].input;
+      if (typeof inputObj === 'object' && !Array.isArray(inputObj)) {
+        argNames = Object.keys(inputObj).join(", "); // e.g., "k, tree, target_sum"
+      }
+    }
+
+    if (lang === "python") {
+      return `def ${prob.function_name}(${argNames}):\n    # Write your Python code here\n    pass`;
+    } else if (lang === "cpp") {
+      // C++ needs types, so we add placeholder comments for the user to fill in
+      const cppArgs = argNames.split(", ").map(arg => `/* type */ ${arg}`).join(", ");
+      return `// Note: Replace /* type */ with actual C++ types (int, vector<int>, etc.)\nint ${prob.function_name}(${cppArgs}) {\n    // Write your C++ code here\n    return 0;\n}`;
+    }
+    return "";
+  };
+
   // Fetch the problem details when the page loads
+  // useEffect(() => {
+  //   async function fetchProblem() {
+  //     try {
+  //       const res = await axios.get("http://127.0.0.1:8000/problems");
+  //       setProblemsList(res.data); // <-- ADD THIS to store all 616 problems
+        
+  //       if (res.data.length > 0) {
+  //         setProblem(res.data[0]); 
+  //         fetchHistory(res.data[0].id); 
+  //       }
+  //     } catch (err) {
+  //       console.error("Backend not running?", err);
+  //     }
+  //   }
+  //   fetchProblem();
+  // }, []);
+
+  // const handleProblemChange = (e) => {
+  //   const selectedId = parseInt(e.target.value);
+  //   const selectedProb = problemsList.find(p => p.id === selectedId);
+    
+  //   setProblem(selectedProb);
+  //   fetchHistory(selectedId);
+  //   setOutput(null); // Clear the console output from the last problem
+  // };
+
   useEffect(() => {
     async function fetchProblem() {
       try {
         const res = await axios.get("http://127.0.0.1:8000/problems");
+        setProblemsList(res.data);
         if (res.data.length > 0) {
           setProblem(res.data[0]); 
-          fetchHistory(res.data[0].id); // Fetch history immediately
+          
+          // SET INITIAL BOILERPLATE
+          setCode(generateBoilerplate(res.data[0], "python")); 
+          fetchHistory(res.data[0].id); 
         }
       } catch (err) {
         console.error("Backend not running?", err);
@@ -28,6 +82,18 @@ function App() {
     }
     fetchProblem();
   }, []);
+
+  const handleProblemChange = (e) => {
+    const selectedId = parseInt(e.target.value);
+    const selectedProb = problemsList.find(p => p.id === selectedId);
+    
+    setProblem(selectedProb);
+    
+    // SET BOILERPLATE WHEN PROBLEM CHANGES
+    setCode(generateBoilerplate(selectedProb, language)); 
+    fetchHistory(selectedId);
+    setOutput(null); 
+  };
 
   // NEW FUNCTION: Fetch the submission history
   const fetchHistory = async (problemId) => {
@@ -38,6 +104,8 @@ function App() {
       console.error("Could not fetch history");
     }
   };
+
+
 
   const handleSubmit = async () => {
     setLoading(true);
@@ -65,12 +133,33 @@ function App() {
     <div className="min-h-screen bg-gray-900 text-white flex flex-col font-sans">
       
       {/* Navbar */}
-      <header className="bg-gray-800 p-4 border-b border-gray-700 flex justify-between items-center">
-        <h1 className="text-xl font-bold text-yellow-500">LeetClone 🚀</h1>
+      <header className="bg-gray-800 p-4 border-b border-gray-700 flex justify-between items-center gap-4">
+        <h1 className="text-xl font-bold text-yellow-500 whitespace-nowrap">LeetClone 🚀</h1>
+        
+        {/* NEW: Problem Selector Dropdown */}
+        <div className="flex-1 max-w-xl mx-4">
+          <select 
+            className="w-full bg-gray-900 text-white px-3 py-2 rounded border border-gray-600 focus:outline-none focus:border-blue-500"
+            value={problem ? problem.id : ""}
+            onChange={handleProblemChange}
+          >
+            {problemsList.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.id}. {p.title} ({p.difficulty})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Language Selector */}
         <select 
-          className="bg-gray-700 text-white px-3 py-1 rounded border border-gray-600"
+          className="bg-gray-700 text-white px-3 py-2 rounded border border-gray-600"
           value={language}
-          onChange={(e) => setLanguage(e.target.value)}
+          onChange={(e) => {
+            const newLang = e.target.value;
+            setLanguage(newLang);
+            setCode(generateBoilerplate(problem, newLang)); // UPDATE BOILERPLATE ON LANGUAGE SWAP
+          }}
         >
           <option value="python">Python</option>
           <option value="cpp">C++</option>
@@ -106,20 +195,38 @@ function App() {
               problem ? (
                 <>
                   <h2 className="text-2xl font-bold mb-4">{problem.title}</h2>
-                  <span className={`inline-block px-2 py-1 text-xs font-semibold rounded mb-4 
-                    ${problem.difficulty === "Easy" ? "bg-green-900 text-green-300" : "bg-red-900 text-red-300"}`}>
+                  <span className={`inline-block px-2 py-1 text-xs font-semibold rounded mb-6 
+                    ${problem.difficulty === "Easy" ? "bg-green-900 text-green-300" : problem.difficulty === "Medium" ? "bg-yellow-900 text-yellow-300" : "bg-red-900 text-red-300"}`}>
                     {problem.difficulty}
                   </span>
-                  <p className="text-gray-300 leading-relaxed">
-                    Given two integers <code>a</code> and <code>b</code>, return the sum of the two integers.
-                  </p>
-                  <div className="mt-8">
-                    <h3 className="font-bold text-gray-400 mb-2">Example 1:</h3>
-                    <div className="bg-gray-800 p-3 rounded text-sm font-mono text-gray-300">
-                      Input: a = 1, b = 2<br/>
-                      Output: 3
-                    </div>
+                  
+                  {/* WE DELETED THE HARDCODED TEXT AND REPLACED IT WITH THIS: */}
+                  <div className="text-gray-300 leading-relaxed whitespace-pre-wrap font-sans text-sm">
+                    {problem.description}
                   </div>
+                  {/* --- NEW: CONSTRAINTS --- */}
+                  {problem.constraints && problem.constraints.length > 0 && (
+                    <div className="mt-6">
+                      <h3 className="font-bold text-gray-400 mb-2">Constraints:</h3>
+                      <ul className="list-disc list-inside text-gray-300 text-sm font-mono bg-gray-800 p-3 rounded">
+                        {problem.constraints.map((c, i) => <li key={i}>{c}</li>)}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* --- NEW: EXAMPLES --- */}
+                  {problem.examples && problem.examples.length > 0 && (
+                    <div className="mt-6 pb-10">
+                      <h3 className="font-bold text-gray-400 mb-2">Examples:</h3>
+                      {problem.examples.map((ex, i) => (
+                        <div key={i} className="mb-4 bg-gray-800 p-3 rounded text-sm font-mono text-gray-300 overflow-x-auto">
+                          <span className="font-bold text-gray-400">Input:</span> {JSON.stringify(ex.input)}<br/>
+                          <span className="font-bold text-gray-400">Output:</span> {JSON.stringify(ex.output ?? ex.expected_output)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                 </>
               ) : (
                 <p className="text-gray-500">Loading problem...</p>

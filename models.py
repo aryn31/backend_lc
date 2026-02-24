@@ -11,6 +11,10 @@ class Problem(Base):
     difficulty = Column(String)                 # e.g., "Easy", "Medium", "Hard"
     function_name = Column(String)              # e.g., "add"
 
+    # --- WE ARE ADDING THESE TWO LINES ---
+    examples = Column(JSON)      
+    constraints = Column(JSON)
+
     # Relationships: This allows us to easily fetch all test cases for a problem
     # by just typing: `my_problem.test_cases`
     test_cases = relationship("TestCase", back_populates="problem")

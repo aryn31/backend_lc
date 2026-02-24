@@ -82,10 +82,85 @@ if __name__ == "__main__":
 """
     return wrapper_code
 
+# def generate_cpp_script(user_code: str, function_name: str, test_cases: list) -> str:
+#     cpp_code = f"""#include <iostream>
+# #include <fstream>
+# #include <string>
+
+# // --- USER CODE ---
+# {user_code}
+
+# int main() {{
+#     std::ofstream out("/app/output.json");
+#     int passed_count = 0;
+# """
+#     for i, tc in enumerate(test_cases):
+#         inputs = ", ".join(map(str, tc["inputs"])) 
+#         expected = tc["expected"]
+
+#         inputs_display=f"[{inputs}]"
+        
+#         # FIX: We now evaluate the function FIRST and store it in 'result_i'.
+#         # This prevents the C++ stream from breaking our JSON string!
+#         cpp_code += f"""
+#     int result_{i} = {function_name}({inputs});
+    
+#     if (result_{i} == {expected}) {{
+#         passed_count++;
+#     }} else {{
+#         // adding new inputs field in json string
+#         out << "{{\\"status\\": \\"Failed\\", \\"test_case\\": {i+1},\\"input\\":{inputs_display}, \\"expected\\": {expected}, \\"got\\": " << result_{i} << "}}";
+#         return 0;
+#     }}
+# """
+#     cpp_code += f"""
+#     out << "{{\\"status\\": \\"Accepted\\", \\"passed\\": " << passed_count << ", \\"total\\": {len(test_cases)}}}";
+#     return 0;
+# }}
+# """
+#     return cpp_code
+
 def generate_cpp_script(user_code: str, function_name: str, test_cases: list) -> str:
+    # --- NEW: Helper to translate Python types to C++ literals ---
+    def to_cpp_value(val):
+        if isinstance(val, bool):
+            return "true" if val else "false"
+        elif isinstance(val, str):
+            return f'"{val}"'
+        elif isinstance(val, list):
+            if len(val) == 0:
+                return "std::vector<int>{}"
+            # Check the type of the first element to make the right vector
+            if isinstance(val[0], str):
+                elems = ", ".join(to_cpp_value(x) for x in val)
+                return f"std::vector<std::string>{{{elems}}}"
+            else:
+                elems = ", ".join(to_cpp_value(x) for x in val)
+                return f"std::vector<int>{{{elems}}}"
+        else:
+            return str(val)
+
+    # --- NEW: We inject vector templates and to_json helpers into C++ ---
     cpp_code = f"""#include <iostream>
 #include <fstream>
 #include <string>
+#include <vector>
+
+// C++ JSON Serializers (allows C++ to save arrays back to output.json)
+std::string to_json(int val) {{ return std::to_string(val); }}
+std::string to_json(bool val) {{ return val ? "true" : "false"; }}
+std::string to_json(const std::string& val) {{ return "\\"" + val + "\\""; }}
+
+template <typename T>
+std::string to_json(const std::vector<T>& v) {{
+    std::string res = "[";
+    for (size_t i = 0; i < v.size(); ++i) {{
+        res += to_json(v[i]);
+        if (i != v.size() - 1) res += ", ";
+    }}
+    res += "]";
+    return res;
+}}
 
 // --- USER CODE ---
 {user_code}
@@ -95,21 +170,22 @@ int main() {{
     int passed_count = 0;
 """
     for i, tc in enumerate(test_cases):
-        inputs = ", ".join(map(str, tc["inputs"])) 
-        expected = tc["expected"]
-
-        inputs_display=f"[{inputs}]"
+        # Translate python inputs to C++ (e.g. [1, 2] -> std::vector<int>{1, 2})
+        inputs_str = ", ".join(to_cpp_value(x) for x in tc["inputs"]) 
+        expected_cpp = to_cpp_value(tc["expected"])
         
-        # FIX: We now evaluate the function FIRST and store it in 'result_i'.
-        # This prevents the C++ stream from breaking our JSON string!
+        # Escape strings safely for the frontend JSON string
+        input_display = json.dumps(tc["inputs"]).replace('"', '\\"')
+        expected_display = json.dumps(tc["expected"]).replace('"', '\\"')
+        
+        # Notice we now use 'auto' instead of 'int' so it supports vectors!
         cpp_code += f"""
-    int result_{i} = {function_name}({inputs});
+    auto result_{i} = {function_name}({inputs_str});
     
-    if (result_{i} == {expected}) {{
+    if (result_{i} == {expected_cpp}) {{
         passed_count++;
     }} else {{
-        // adding new inputs field in json string
-        out << "{{\\"status\\": \\"Failed\\", \\"test_case\\": {i+1},\\"input\\":{inputs_display}, \\"expected\\": {expected}, \\"got\\": " << result_{i} << "}}";
+        out << "{{\\"status\\": \\"Failed\\", \\"test_case\\": {i+1}, \\"input\\": \\"{input_display}\\", \\"expected\\": {expected_display}, \\"got\\": " << to_json(result_{i}) << "}}";
         return 0;
     }}
 """
@@ -233,11 +309,30 @@ def submit_code(submission: CodeSubmission,db: Session=Depends(getdb)):
 @app.get("/")
 def read_root():
     return {"status": "Judge System Online 👨‍⚖️"}
+
+# # --- 5. NEW: See all problems ---
+# @app.get("/problems")
+# def get_problems(db: Session=Depends(getdb)):
+#     problems = db.query(Problem).all()
+#     return [{"id": p.id, "title": p.title, "difficulty": p.difficulty} for p in problems]
+
 # --- 5. NEW: See all problems ---
 @app.get("/problems")
-def get_problems(db: Session=Depends(getdb)):
+def get_problems(db: Session = Depends(getdb)):
     problems = db.query(Problem).all()
-    return [{"id": p.id, "title": p.title, "difficulty": p.difficulty} for p in problems]
+    # WE ADDED "description": p.description HERE!
+    return [
+        {
+            "id": p.id, 
+            "title": p.title, 
+            "difficulty": p.difficulty,
+            "description": p.description,
+            "function_name": p.function_name,
+            "examples": p.examples,
+            "constraints": p.constraints 
+        } 
+        for p in problems
+    ]
 
 @app.get("/problems/{problem_id}/submissions")
 def get_submissions(problem_id:int, db: Session=Depends(getdb)):
