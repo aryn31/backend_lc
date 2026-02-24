@@ -1,0 +1,9 @@
+flowchart LR
+    A["React Frontend\n(Monaco Editor)"] -->|"POST /submit\n(code + language)"| B["FastAPI Backend"]
+    B --> C["SQLite DB\n(Problems + Test Cases)"]
+    C -->|"Hidden test cases"| B
+    B --> D["Generate runner script\n(runner.py or runner.cpp)"]
+    D --> E["Ephemeral Docker Container\n(python-sandbox / cpp-sandbox)"]
+    E -->|"output.json"| B
+    B -->|"Save submission"| C
+    B -->|"Result JSON"| A
